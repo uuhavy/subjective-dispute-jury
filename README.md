@@ -234,8 +234,8 @@ pytest tests/test_subjective_dispute_jury.py -v
 This contract primitive is deployed on **GenLayer Studio (studionet)**:
 
 - **Network:** `studionet`
-- **Contract Address:** `0x702C091a9404EE083F22D5F7a475670cD1Ae30D9`
-- **Explorer URL:** https://explorer-studio.genlayer.com/address/0x702C091a9404EE083F22D5F7a475670cD1Ae30D9
+- **Contract Address:** `0xfDBDF1B28Cce30C24D186cBaEafc65A74f43E4a5`
+- **Explorer URL:** https://explorer-studio.genlayer.com/address/0xfDBDF1B28Cce30C24D186cBaEafc65A74f43E4a5
 - **Contract Source:** `contracts/subjective_dispute_jury.py`
 - **Verification Status:** Compiled and deployed with active schema generation.
 
