@@ -15,7 +15,10 @@ class DisputeRecord:
     respondent_evidence_url: str
     dispute_rules: str
     verdict: str
+    settlement_tier: str
     liability_split: bigint
+    claimant_payout_pct: bigint
+    respondent_payout_pct: bigint
     confidence: bigint
     rationale: str
     resolved_index: bigint
@@ -29,16 +32,18 @@ def get_confidence_band(score: int) -> int:
     return 2
 
 
-def get_liability_band(split: int) -> int:
-    if split >= 75:
-        return 4
-    elif split > 55:
-        return 3
-    elif split >= 45:
-        return 2
-    elif split > 25:
-        return 1
-    return 0
+def get_canonical_tier_payout(tier: str) -> int:
+    if tier == "FULL_CLAIMANT":
+        return 100
+    elif tier == "MAJOR_CLAIMANT":
+        return 75
+    elif tier == "SPLIT_EQUAL":
+        return 50
+    elif tier == "MAJOR_RESPONDENT":
+        return 25
+    elif tier == "FULL_RESPONDENT":
+        return 0
+    return 50
 
 
 class Contract(gl.Contract):
@@ -163,21 +168,23 @@ class Contract(gl.Contract):
                 f"Claimant Evidence (first 4000 chars):\n{clean_c_sample}\n\n"
                 f"Respondent Evidence (first 4000 chars):\n{clean_r_sample}\n\n"
                 "Evaluate both parties' claims strictly under the governing dispute rules.\n"
-                "Determine the liability and fault allocation. You must return ONLY a JSON object with this exact schema:\n"
+                "Determine the verdict and canonical settlement tier. You must return ONLY a JSON object with this exact schema:\n"
                 "{\n"
                 '  "verdict": "FAVOR_CLAIMANT" | "FAVOR_RESPONDENT" | "SPLIT_EQUAL",\n'
-                '  "liability_split": <integer 0-100>,\n'
+                '  "settlement_tier": "FULL_CLAIMANT" | "MAJOR_CLAIMANT" | "SPLIT_EQUAL" | "MAJOR_RESPONDENT" | "FULL_RESPONDENT",\n'
                 '  "confidence": <integer 0-100>,\n'
                 '  "rationale": "<concise judicial justification explaining which party provided superior evidence>"\n'
                 "}\n\n"
-                "Verdict definitions:\n"
-                "- FAVOR_CLAIMANT: Claimant fulfilled obligations; respondent breached or failed terms.\n"
-                "- FAVOR_RESPONDENT: Respondent provided sufficient proof of performance or claimant acted in bad faith.\n"
-                "- SPLIT_EQUAL: Both parties share mutual partial fault or evidence is equiponderant.\n\n"
-                "Liability split definition:\n"
-                "- Percentage of funds/allocation awarded to Claimant (0 to 100).\n"
-                "- 100 = 100% claimant favored, 0 = 100% respondent favored, 50 = 50/50 split.\n"
-                "Ensure all scores are integers between 0 and 100. Return valid JSON only with no commentary."
+                "Verdict and Settlement Tier definitions:\n"
+                "- FAVOR_CLAIMANT:\n"
+                "  * FULL_CLAIMANT: Claimant fulfilled all obligations; respondent committed total breach (100% claimant payout).\n"
+                "  * MAJOR_CLAIMANT: Claimant substantially performed with minor flaw, or respondent primarily at fault (75% claimant payout).\n"
+                "- FAVOR_RESPONDENT:\n"
+                "  * FULL_RESPONDENT: Respondent provided full proof of performance or claimant claim is baseless (0% claimant / 100% respondent payout).\n"
+                "  * MAJOR_RESPONDENT: Respondent substantially performed; claimant primarily at fault (25% claimant / 75% respondent payout).\n"
+                "- SPLIT_EQUAL:\n"
+                "  * SPLIT_EQUAL: Both parties share mutual partial fault or evidence is equiponderant (50% claimant / 50% respondent payout).\n\n"
+                "Ensure confidence is an integer between 0 and 100. Return valid JSON only with no commentary."
             )
 
             try:
@@ -206,8 +213,34 @@ class Contract(gl.Contract):
                     f"Invalid verdict from LLM: '{verdict_val}'. Expected FAVOR_CLAIMANT, FAVOR_RESPONDENT, or SPLIT_EQUAL"
                 )
 
-            def sanitize_int(key_name: str, fallback: int = 50) -> int:
-                val = parsed.get(key_name, fallback)
+            tier_val = str(parsed.get("settlement_tier", "")).strip().upper()
+            valid_tiers = (
+                "FULL_CLAIMANT",
+                "MAJOR_CLAIMANT",
+                "SPLIT_EQUAL",
+                "MAJOR_RESPONDENT",
+                "FULL_RESPONDENT",
+            )
+            if tier_val not in valid_tiers:
+                raise gl.vm.UserError(
+                    f"Invalid settlement_tier from LLM: '{tier_val}'"
+                )
+
+            # Ensure verdict and tier consistency
+            if verdict_val == "FAVOR_CLAIMANT" and tier_val not in (
+                "FULL_CLAIMANT",
+                "MAJOR_CLAIMANT",
+            ):
+                tier_val = "MAJOR_CLAIMANT"
+            elif verdict_val == "FAVOR_RESPONDENT" and tier_val not in (
+                "FULL_RESPONDENT",
+                "MAJOR_RESPONDENT",
+            ):
+                tier_val = "MAJOR_RESPONDENT"
+            elif verdict_val == "SPLIT_EQUAL" and tier_val != "SPLIT_EQUAL":
+                tier_val = "SPLIT_EQUAL"
+
+            def sanitize_confidence(val, fallback: int = 50) -> int:
                 try:
                     num = int(val)
                     if num < 0:
@@ -218,8 +251,7 @@ class Contract(gl.Contract):
                 except (ValueError, TypeError):
                     return fallback
 
-            split_val = sanitize_int("liability_split", 50)
-            confidence_val = sanitize_int("confidence", 50)
+            confidence_val = sanitize_confidence(parsed.get("confidence", 50))
 
             raw_rationale = str(parsed.get("rationale", "No rationale provided"))
             rationale_val = (
@@ -228,7 +260,7 @@ class Contract(gl.Contract):
 
             return {
                 "verdict": verdict_val,
-                "liability_split": split_val,
+                "settlement_tier": tier_val,
                 "confidence": confidence_val,
                 "rationale": rationale_val,
             }
@@ -242,8 +274,16 @@ class Contract(gl.Contract):
                 return False
 
             leader_verdict = leader_data.get("verdict")
-            leader_split = leader_data.get("liability_split")
+            leader_tier = leader_data.get("settlement_tier")
             leader_conf = leader_data.get("confidence")
+
+            valid_tiers = (
+                "FULL_CLAIMANT",
+                "MAJOR_CLAIMANT",
+                "SPLIT_EQUAL",
+                "MAJOR_RESPONDENT",
+                "FULL_RESPONDENT",
+            )
 
             if leader_verdict not in (
                 "FAVOR_CLAIMANT",
@@ -251,7 +291,9 @@ class Contract(gl.Contract):
                 "SPLIT_EQUAL",
             ):
                 return False
-            if not isinstance(leader_split, int) or not isinstance(leader_conf, int):
+            if leader_tier not in valid_tiers:
+                return False
+            if not isinstance(leader_conf, int):
                 return False
 
             try:
@@ -263,7 +305,7 @@ class Contract(gl.Contract):
                 return False
 
             validator_verdict = validator_data.get("verdict")
-            validator_split = validator_data.get("liability_split")
+            validator_tier = validator_data.get("settlement_tier")
             validator_conf = validator_data.get("confidence")
 
             if validator_verdict not in (
@@ -272,17 +314,20 @@ class Contract(gl.Contract):
                 "SPLIT_EQUAL",
             ):
                 return False
-            if not isinstance(validator_split, int) or not isinstance(validator_conf, int):
+            if validator_tier not in valid_tiers:
+                return False
+            if not isinstance(validator_conf, int):
                 return False
 
             # Semantic Consensus Rule 1: Verdict match
             if leader_verdict != validator_verdict:
                 return False
 
-            # Semantic Consensus Rule 2: Liability band match and 15% tolerance
-            if get_liability_band(leader_split) != get_liability_band(validator_split):
-                return False
-            if abs(leader_split - validator_split) > 15:
+            # Semantic Consensus Rule 2: Canonical settlement tier match
+            # Both leader and validator must independently agree on the EXACT canonical
+            # settlement tier. The on-chain payout is deterministically bound to this canonical
+            # schedule (100%, 75%, 50%, 25%, 0%), guaranteeing an economically equivalent result.
+            if leader_tier != validator_tier:
                 return False
 
             # Semantic Consensus Rule 3: Confidence band match
@@ -293,7 +338,13 @@ class Contract(gl.Contract):
 
         adjudication = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
-        # Deterministic state commit
+        # Deterministic state commit:
+        # Payout percentages are strictly and deterministically bound to the agreed canonical tier,
+        # preventing any economic divergence or validator manipulation.
+        settlement_tier_str = str(adjudication["settlement_tier"])
+        c_payout = get_canonical_tier_payout(settlement_tier_str)
+        r_payout = 100 - c_payout
+
         next_index = int(self.total_disputes) + 1
         dispute_id = f"DISPUTE-{next_index:06d}"
         v_str = str(adjudication["verdict"])
@@ -306,7 +357,10 @@ class Contract(gl.Contract):
             respondent_evidence_url=target_r_url,
             dispute_rules=target_rules,
             verdict=v_str,
-            liability_split=bigint(adjudication["liability_split"]),
+            settlement_tier=settlement_tier_str,
+            liability_split=bigint(c_payout),
+            claimant_payout_pct=bigint(c_payout),
+            respondent_payout_pct=bigint(r_payout),
             confidence=bigint(adjudication["confidence"]),
             rationale=str(adjudication["rationale"]),
             resolved_index=bigint(next_index),
@@ -339,7 +393,10 @@ class Contract(gl.Contract):
             "respondent_evidence_url": rec.respondent_evidence_url,
             "dispute_rules": rec.dispute_rules,
             "verdict": rec.verdict,
+            "settlement_tier": rec.settlement_tier,
             "liability_split": int(rec.liability_split),
+            "claimant_payout_pct": int(rec.claimant_payout_pct),
+            "respondent_payout_pct": int(rec.respondent_payout_pct),
             "confidence": int(rec.confidence),
             "rationale": rec.rationale,
             "resolved_index": int(rec.resolved_index),
@@ -365,6 +422,24 @@ class Contract(gl.Contract):
         if dispute_id not in self.disputes:
             raise gl.vm.UserError(f"Dispute record not found for id: {dispute_id}")
         return int(self.disputes[dispute_id].liability_split)
+
+    @gl.public.view
+    def get_settlement_tier(self, dispute_id: str) -> str:
+        if dispute_id not in self.disputes:
+            raise gl.vm.UserError(f"Dispute record not found for id: {dispute_id}")
+        return self.disputes[dispute_id].settlement_tier
+
+    @gl.public.view
+    def get_claimant_payout_pct(self, dispute_id: str) -> int:
+        if dispute_id not in self.disputes:
+            raise gl.vm.UserError(f"Dispute record not found for id: {dispute_id}")
+        return int(self.disputes[dispute_id].claimant_payout_pct)
+
+    @gl.public.view
+    def get_respondent_payout_pct(self, dispute_id: str) -> int:
+        if dispute_id not in self.disputes:
+            raise gl.vm.UserError(f"Dispute record not found for id: {dispute_id}")
+        return int(self.disputes[dispute_id].respondent_payout_pct)
 
     @gl.public.view
     def get_party_latest_dispute(self, party: str) -> str:

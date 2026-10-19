@@ -53,10 +53,10 @@ class MockNondet:
                     return response
                 return json.dumps(response)
 
-        # Default fallback adjudication
+        # Default fallback adjudication with canonical settlement tier
         return json.dumps({
             "verdict": "FAVOR_CLAIMANT",
-            "liability_split": 80,
+            "settlement_tier": "MAJOR_CLAIMANT",
             "confidence": 85,
             "rationale": "Default mock arbitration ruling"
         })
@@ -129,11 +129,6 @@ if "genlayer" not in sys.modules:
 
 # Global mock installation helper accepting dict parameter
 def sim_installMocks(target_env, mocks: dict):
-    """
-    Installs mock configurations for web rendering and LLM prompt execution.
-    Accepts a dictionary configuring 'nondet_web_request' (or 'web') and
-    'nondet_exec_prompt' (or 'llm').
-    """
     if hasattr(target_env, "sim_installMocks"):
         return target_env.sim_installMocks(mocks)
 
@@ -201,7 +196,7 @@ def test_sim_install_mocks_structure(test_env):
         "nondet_exec_prompt": {
             "arbitration court": {
                 "verdict": "FAVOR_CLAIMANT",
-                "liability_split": 85,
+                "settlement_tier": "FULL_CLAIMANT",
                 "confidence": 90,
                 "rationale": "Claimant provided verifiable Git commits matching the scope."
             }
@@ -214,8 +209,8 @@ def test_sim_install_mocks_structure(test_env):
     assert "arbitration court" in mock_gl.nondet.prompts
 
 
-def test_dispute_favor_claimant_happy_path(test_env):
-    """Happy path: Unanimous consensus resolving in favor of claimant."""
+def test_dispute_favor_claimant_full_award(test_env):
+    """Happy path: Unanimous consensus resolving in favor of claimant with FULL_CLAIMANT award (100%)."""
     contract = test_env["contract"]
     mock_gl = test_env["mock_gl"]
 
@@ -231,7 +226,7 @@ def test_dispute_favor_claimant_happy_path(test_env):
         "nondet_exec_prompt": {
             "arbitration court": json.dumps({
                 "verdict": "FAVOR_CLAIMANT",
-                "liability_split": 90,
+                "settlement_tier": "FULL_CLAIMANT",
                 "confidence": 95,
                 "rationale": "Claimant fully satisfied original SLA before scope change."
             })
@@ -251,7 +246,10 @@ def test_dispute_favor_claimant_happy_path(test_env):
     assert contract.get_dispute_count() == 1
     assert contract.has_dispute(dispute_id) is True
     assert contract.get_dispute_status(dispute_id) == "FAVOR_CLAIMANT"
-    assert contract.get_dispute_liability_split(dispute_id) == 90
+    assert contract.get_settlement_tier(dispute_id) == "FULL_CLAIMANT"
+    assert contract.get_claimant_payout_pct(dispute_id) == 100
+    assert contract.get_respondent_payout_pct(dispute_id) == 0
+    assert contract.get_dispute_liability_split(dispute_id) == 100
     assert contract.get_party_latest_dispute("0xAliceFreelancer") == dispute_id
     assert contract.get_party_latest_dispute("0xBobClient") == dispute_id
 
@@ -260,7 +258,10 @@ def test_dispute_favor_claimant_happy_path(test_env):
     record = json.loads(record_json)
     assert record["dispute_id"] == "DISPUTE-000001"
     assert record["verdict"] == "FAVOR_CLAIMANT"
-    assert record["liability_split"] == 90
+    assert record["settlement_tier"] == "FULL_CLAIMANT"
+    assert record["claimant_payout_pct"] == 100
+    assert record["respondent_payout_pct"] == 0
+    assert record["liability_split"] == 100
     assert record["confidence"] == 95
     assert "original SLA" in record["rationale"]
 
@@ -272,8 +273,47 @@ def test_dispute_favor_claimant_happy_path(test_env):
     assert stats["split_equal_count"] == 0
 
 
+def test_dispute_favor_claimant_major_award(test_env):
+    """Happy path: Consensus on MAJOR_CLAIMANT tier deterministically binds payout to exactly 75%."""
+    contract = test_env["contract"]
+    mock_gl = test_env["mock_gl"]
+
+    c_url = "https://escrow.org/claimant/case1b"
+    r_url = "https://escrow.org/respondent/case1b"
+    rules = "Deliverable with minor bug incurs partial deduction."
+
+    mocks = {
+        "nondet_web_request": {
+            c_url: "Feature completed with minor CSS flaw.",
+            r_url: "Minor CSS flaw reported."
+        },
+        "nondet_exec_prompt": {
+            "arbitration court": json.dumps({
+                "verdict": "FAVOR_CLAIMANT",
+                "settlement_tier": "MAJOR_CLAIMANT",
+                "confidence": 90,
+                "rationale": "Substantial delivery with minor defect justifies 75% payout."
+            })
+        }
+    }
+    sim_installMocks(mock_gl, mocks)
+
+    dispute_id = contract.file_dispute(
+        claimant="0xAlice",
+        respondent="0xBob",
+        claimant_evidence_url=c_url,
+        respondent_evidence_url=r_url,
+        dispute_rules=rules,
+    )
+
+    assert contract.get_settlement_tier(dispute_id) == "MAJOR_CLAIMANT"
+    assert contract.get_claimant_payout_pct(dispute_id) == 75
+    assert contract.get_respondent_payout_pct(dispute_id) == 25
+    assert contract.get_dispute_liability_split(dispute_id) == 75
+
+
 def test_dispute_favor_respondent_happy_path(test_env):
-    """Happy path: Evaluation resolves in favor of respondent."""
+    """Happy path: Evaluation resolves in favor of respondent with FULL_RESPONDENT award (0% claimant)."""
     contract = test_env["contract"]
     mock_gl = test_env["mock_gl"]
 
@@ -289,7 +329,7 @@ def test_dispute_favor_respondent_happy_path(test_env):
         "nondet_exec_prompt": {
             "arbitration court": json.dumps({
                 "verdict": "FAVOR_RESPONDENT",
-                "liability_split": 10,
+                "settlement_tier": "FULL_RESPONDENT",
                 "confidence": 92,
                 "rationale": "Critical vulnerability breached contractual zero-bug threshold."
             })
@@ -307,14 +347,17 @@ def test_dispute_favor_respondent_happy_path(test_env):
 
     assert dispute_id == "DISPUTE-000001"
     assert contract.get_dispute_status(dispute_id) == "FAVOR_RESPONDENT"
-    assert contract.get_dispute_liability_split(dispute_id) == 10
+    assert contract.get_settlement_tier(dispute_id) == "FULL_RESPONDENT"
+    assert contract.get_claimant_payout_pct(dispute_id) == 0
+    assert contract.get_respondent_payout_pct(dispute_id) == 100
+    assert contract.get_dispute_liability_split(dispute_id) == 0
 
     stats = json.loads(contract.get_statistics())
     assert stats["favor_respondent_count"] == 1
 
 
 def test_dispute_split_equal_happy_path(test_env):
-    """Happy path: Split judgment resolution (mutual partial fault)."""
+    """Happy path: Split judgment resolution (mutual partial fault binds to exactly 50%)."""
     contract = test_env["contract"]
     mock_gl = test_env["mock_gl"]
 
@@ -330,7 +373,7 @@ def test_dispute_split_equal_happy_path(test_env):
         "nondet_exec_prompt": {
             "arbitration court": json.dumps({
                 "verdict": "SPLIT_EQUAL",
-                "liability_split": 50,
+                "settlement_tier": "SPLIT_EQUAL",
                 "confidence": 80,
                 "rationale": "Both parties share responsibility under customs clause."
             })
@@ -348,6 +391,9 @@ def test_dispute_split_equal_happy_path(test_env):
 
     assert dispute_id == "DISPUTE-000001"
     assert contract.get_dispute_status(dispute_id) == "SPLIT_EQUAL"
+    assert contract.get_settlement_tier(dispute_id) == "SPLIT_EQUAL"
+    assert contract.get_claimant_payout_pct(dispute_id) == 50
+    assert contract.get_respondent_payout_pct(dispute_id) == 50
     assert contract.get_dispute_liability_split(dispute_id) == 50
 
     stats = json.loads(contract.get_statistics())
@@ -358,7 +404,6 @@ def test_consensus_mismatch_verdict_disagreement(test_env):
     """Consensus failure: Leader returns FAVOR_CLAIMANT but validator returns FAVOR_RESPONDENT."""
     contract = test_env["contract"]
     mock_gl = test_env["mock_gl"]
-    sdj = test_env["module"]
 
     c_url = "https://dispute.org/claimant"
     r_url = "https://dispute.org/respondent"
@@ -368,23 +413,19 @@ def test_consensus_mismatch_verdict_disagreement(test_env):
 
     mock_gl.nondet.prompts["arbitration court"] = json.dumps({
         "verdict": "FAVOR_CLAIMANT",
-        "liability_split": 80,
+        "settlement_tier": "FULL_CLAIMANT",
         "confidence": 85,
         "rationale": "Leader favors claimant"
     })
 
     def disagreeing_validator(leader_res):
         val_verdict = "FAVOR_RESPONDENT"
-        val_split = 20
+        val_tier = "FULL_RESPONDENT"
         val_conf = 85
 
         if leader_res.calldata["verdict"] != val_verdict:
             return False
-        if sdj.get_liability_band(leader_res.calldata["liability_split"]) != sdj.get_liability_band(val_split):
-            return False
-        if abs(leader_res.calldata["liability_split"] - val_split) > 15:
-            return False
-        if sdj.get_confidence_band(leader_res.calldata["confidence"]) != sdj.get_confidence_band(val_conf):
+        if leader_res.calldata["settlement_tier"] != val_tier:
             return False
         return True
 
@@ -394,11 +435,14 @@ def test_consensus_mismatch_verdict_disagreement(test_env):
         contract.file_dispute("0xAlice", "0xBob", c_url, r_url, "Rules")
 
 
-def test_consensus_mismatch_liability_band_divergence(test_env):
-    """Consensus failure: Verdicts match but liability allocation diverges beyond band tolerance."""
+def test_consensus_mismatch_settlement_tier_divergence(test_env):
+    """Consensus failure: Verdicts match but settlement tiers diverge (FULL_CLAIMANT vs MAJOR_CLAIMANT).
+    
+    This guarantees that validators reject any divergence in economic payout schedules,
+    preventing non-equivalent payouts from ever passing consensus.
+    """
     contract = test_env["contract"]
     mock_gl = test_env["mock_gl"]
-    sdj = test_env["module"]
 
     c_url = "https://dispute.org/claimant_div"
     r_url = "https://dispute.org/respondent_div"
@@ -406,31 +450,27 @@ def test_consensus_mismatch_liability_band_divergence(test_env):
     mock_gl.nondet.web.urls[c_url] = "Claimant text"
     mock_gl.nondet.web.urls[r_url] = "Respondent text"
 
-    # Leader awards 90% (Band 4: CLAIMANT_DOMINANT)
+    # Leader proposes FULL_CLAIMANT (100% payout)
     mock_gl.nondet.prompts["arbitration court"] = json.dumps({
         "verdict": "FAVOR_CLAIMANT",
-        "liability_split": 90,
+        "settlement_tier": "FULL_CLAIMANT",
         "confidence": 85,
-        "rationale": "Leader awards 90%"
+        "rationale": "Leader awards full claimant"
     })
 
-    # Validator agrees on verdict FAVOR_CLAIMANT but awards 60% (Band 3: CLAIMANT_LEANING, delta > 15%)
-    def liability_diverging_validator(leader_res):
+    # Validator independently evaluates MAJOR_CLAIMANT (75% payout).
+    # Since tiers diverge, consensus MUST FAIL.
+    def tier_diverging_validator(leader_res):
         val_verdict = "FAVOR_CLAIMANT"
-        val_split = 60
-        val_conf = 85
+        val_tier = "MAJOR_CLAIMANT"
 
         if leader_res.calldata["verdict"] != val_verdict:
             return False
-        if sdj.get_liability_band(leader_res.calldata["liability_split"]) != sdj.get_liability_band(val_split):
-            return False
-        if abs(leader_res.calldata["liability_split"] - val_split) > 15:
-            return False
-        if sdj.get_confidence_band(leader_res.calldata["confidence"]) != sdj.get_confidence_band(val_conf):
+        if leader_res.calldata["settlement_tier"] != val_tier:
             return False
         return True
 
-    mock_gl.vm.validator_override = liability_diverging_validator
+    mock_gl.vm.validator_override = tier_diverging_validator
 
     with pytest.raises(Exception, match="Consensus failed: Validator rejected leader proposal"):
         contract.file_dispute("0xAlice", "0xBob", c_url, r_url, "Rules")
@@ -451,7 +491,7 @@ def test_consensus_mismatch_confidence_band_divergence(test_env):
     # Leader has High confidence (85, Band 2)
     mock_gl.nondet.prompts["arbitration court"] = json.dumps({
         "verdict": "FAVOR_CLAIMANT",
-        "liability_split": 80,
+        "settlement_tier": "MAJOR_CLAIMANT",
         "confidence": 85,
         "rationale": "High confidence"
     })
@@ -459,14 +499,12 @@ def test_consensus_mismatch_confidence_band_divergence(test_env):
     # Validator has Moderate confidence (60, Band 1)
     def conf_diverging_validator(leader_res):
         val_verdict = "FAVOR_CLAIMANT"
-        val_split = 80
+        val_tier = "MAJOR_CLAIMANT"
         val_conf = 60
 
         if leader_res.calldata["verdict"] != val_verdict:
             return False
-        if sdj.get_liability_band(leader_res.calldata["liability_split"]) != sdj.get_liability_band(val_split):
-            return False
-        if abs(leader_res.calldata["liability_split"] - val_split) > 15:
+        if leader_res.calldata["settlement_tier"] != val_tier:
             return False
         if sdj.get_confidence_band(leader_res.calldata["confidence"]) != sdj.get_confidence_band(val_conf):
             return False
@@ -581,12 +619,33 @@ def test_error_handling_invalid_verdict_value(test_env):
     mock_gl.nondet.web.urls[r_url] = "Respondent text"
     mock_gl.nondet.prompts["arbitration court"] = json.dumps({
         "verdict": "GUILTY",
-        "liability_split": 50,
+        "settlement_tier": "MAJOR_CLAIMANT",
         "confidence": 50,
         "rationale": "Invalid label"
     })
 
     with pytest.raises(UserError, match="Invalid verdict from LLM"):
+        contract.file_dispute("0xAlice", "0xBob", c_url, r_url, "rules")
+
+
+def test_error_handling_invalid_settlement_tier(test_env):
+    """Error handling: LLM emits non-standard settlement tier."""
+    contract = test_env["contract"]
+    mock_gl = test_env["mock_gl"]
+    UserError = mock_gl.vm.UserError
+
+    c_url = "https://c.org/p3"
+    r_url = "https://r.org/p3"
+    mock_gl.nondet.web.urls[c_url] = "Claimant text"
+    mock_gl.nondet.web.urls[r_url] = "Respondent text"
+    mock_gl.nondet.prompts["arbitration court"] = json.dumps({
+        "verdict": "FAVOR_CLAIMANT",
+        "settlement_tier": "UNKNOWN_TIER",
+        "confidence": 50,
+        "rationale": "Invalid tier"
+    })
+
+    with pytest.raises(UserError, match="Invalid settlement_tier from LLM"):
         contract.file_dispute("0xAlice", "0xBob", c_url, r_url, "rules")
 
 

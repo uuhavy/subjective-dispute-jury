@@ -12,12 +12,19 @@
 Ready-to-copy metadata for the GenLayer Builder Portal submission form:
 
 - **Track:** Intelligent Contracts (0-300 Points Target)
-- **Project Title:** SubjectiveDisputeJury: On-Chain Autonomous Arbitration Court and Liability Primitive
+- **Project Title:** SubjectiveDisputeJury: On-Chain Subjective Arbitration Primitive with Semantic Consensus
 - **Project Description (< 1,000 characters):**
   ```text
-  SubjectiveDisputeJury is a production-grade, reusable Intelligent Contract primitive for GenLayer (Bradbury testnet / GenLayer Studio) that brings decentralized, two-party arbitration on-chain. Built to serve as the adjudication layer for P2P escrows, freelance marketplaces, and OTC trading protocols, it resolves subjective disputes by evaluating natural-language agreements and evidence without human intermediaries. Using gl.vm.run_nondet_unsafe, validator committee nodes independently fetch live evidence from the web via gl.nondet.web.render and reach consensus on the SEMANTIC MEANING of the ruling: requiring strict alignment on categorical verdicts (FAVOR_CLAIMANT, FAVOR_RESPONDENT, SPLIT_EQUAL), liability split bands (0-100% with a 15% tolerance window), and confidence tiers. Features robust GenVM state management using TreeMap, bigint numerical types, and resilient UserError boundaries. Ships with a 16-test gltest suite (100% pass) and comprehensive documentation.
+  SubjectiveDisputeJury is an on-chain two-party arbitration primitive on GenLayer for P2P escrows and marketplaces. Evaluating bilateral contract breaches and conflicting evidence requires subjective natural-language reasoning beyond deterministic EVM logic.
+
+  Architecture:
+  - Leader proposes verdict, canonical settlement tier (FULL_CLAIMANT, MAJOR_CLAIMANT, SPLIT_EQUAL, MAJOR_RESPONDENT, FULL_RESPONDENT), and confidence tier by fetching evidence URLs and parsing natural-language contract terms.
+  - Validators independently re-fetch evidence and reach consensus on semantic meaning: verdict match, exact canonical settlement tier match, and confidence tier.
+  - State: @allow_storage @dataclass DisputeRecord, bigint timestamps/counters, TreeMap[str, ...]. The stored payout allocation is deterministically bound to the agreed canonical tier (100, 75, 50, 25, 0%), guaranteeing an economically equivalent result with zero financial divergence.
+
+  Integration:
+  Escrow protocols call file_dispute(...) on deadlock and execute settlements via get_dispute(...).
   ```
-  *(Length: 982 characters - strictly under the 1,000 character limit)*
 - **Tags:** `intelligent-contracts`, `arbitration`, `consensus`, `dispute-resolution`, `escrow`, `equivalence-principle`, `llm`, `synthetic-jurisdiction`
 
 ---
@@ -34,9 +41,9 @@ Traditional blockchains force users either into trusted multi-sig centralized pa
 **SubjectiveDisputeJury** fulfills GenLayer's core mission by creating an autonomous, two-party arbitration court powered by decentralized LLM validator consensus:
 - **Two-Party Evidence Evaluation:** Ingests live evidence from both claimant and respondent via `gl.nondet.web.render`.
 - **Comparative Arbitration Prompting:** Prompts the LLM acting as an impartial court of law under the parties' natural-language governing terms.
-- **Continuous Liability Allocation:** Calculates a financial allocation split from 0% to 100% (`liability_split`).
-- **Semantic Equivalence Consensus:** Prevents stochastic LLM divergence by requiring validator committee consensus on the **meaning** of the ruling (verdict category, liability split band, and confidence tier).
-- **Standalone Reusability:** Provides a clean interface (`file_dispute`, `get_dispute_liability_split`, `get_dispute_status`) for any escrow contract or marketplace to consume.
+- **Canonical Settlement Tiers:** Evaluates disputes into discrete canonical settlement tiers (`FULL_CLAIMANT`, `MAJOR_CLAIMANT`, `SPLIT_EQUAL`, `MAJOR_RESPONDENT`, `FULL_RESPONDENT`).
+- **Independent Payout Binding (Economically Equivalent Guarantee):** Validators reach consensus on the exact canonical settlement tier, and the stored payout allocation is mathematically locked to that tier benchmark (100%, 75%, 50%, 25%, 0%). This ensures zero financial slippage between nodes.
+- **Standalone Reusability:** Provides a clean interface (`file_dispute`, `get_dispute_liability_split`, `get_settlement_tier`, `get_dispute_status`) for any escrow contract or marketplace to consume.
 
 ---
 
@@ -52,61 +59,58 @@ flowchart TD
         C -->|"gl.nondet.web.render(r_url)"| D2["Respondent Live Evidence"]
         D1 --> C
         D2 --> C
-        C -->|"gl.nondet.exec_prompt"| E["AI Judicial Arbitration Jury"]
+        C -->|"gl.nondet.exec_prompt"| E["AI Judicial Arbitration Court"]
         E -->|"Adjudication JSON"| C
         C -->|"Propose leader_res"| F["Validator Nodes: validator_fn(leader_res)"]
         
         F -->|"Independent Double Web Fetch & AI Adjudication"| G["Validator Independent Review"]
         F --> H{"Semantic Equivalence Rules"}
-        H -->|"1. Verdict Match (FAVOR_CLAIMANT / FAVOR_RESPONDENT / SPLIT_EQUAL)\n2. Liability Band Match (Within 15% tolerance)\n3. Confidence Band Match (Low / Moderate / High)"| I["Consensus Reached (Return True)"]
-        H -->|"Verdict Mismatch OR Band Divergence"| J["Consensus Rejected (Return False)"]
+        H -->|"1. Verdict Match (FAVOR_CLAIMANT / FAVOR_RESPONDENT / SPLIT_EQUAL)\n2. Exact Settlement Tier Match (FULL_CLAIMANT, MAJOR_CLAIMANT, SPLIT_EQUAL, MAJOR_RESPONDENT, FULL_RESPONDENT)\n3. Confidence Band Match (Low / Moderate / High)"| I["Consensus Reached (Return True)"]
+        H -->|"Verdict Mismatch OR Settlement Tier Divergence"| J["Consensus Rejected (Return False)"]
     end
 
     I --> K["Deterministic State Storage"]
     K --> L["disputes: TreeMap[str, DisputeRecord]"]
     K --> M["party_latest_dispute: TreeMap[str, str]"]
-    K --> N["Update Counters: total, favor_claimant, favor_respondent, split_equal"]
-    K --> O["Return dispute_id ('DISPUTE-000001')"]
+    K --> N["Deterministic Payout Binding: 100%, 75%, 50%, 25%, 0%"]
+    K --> O["Update Counters: total, favor_claimant, favor_respondent, split_equal"]
+    K --> P["Return dispute_id ('DISPUTE-000001')"]
 ```
 
 ---
 
-## 4. Semantic Equivalence Consensus Design
+## 4. Canonical Settlement Tier Consensus Design
 
-Naive LLM consensus implementations fail when comparing raw JSON strings or exact percentages. Due to temperature or slight variation, one validator might evaluate liability at 85% and another at 82%. Both clearly rule in favor of the claimant, yet strict string comparison causes consensus to abort.
+### The Economic Equivalence Principle
+In financial escrow arbitration, arbitrary continuous percentages with loose tolerance allow different validators to accept varying payout numbers. If leader proposes 70% and validator evaluated 56%, accepting the proposal would cause a 14 percentage point discrepancy on actual locked collateral.
 
-`SubjectiveDisputeJury` implements **Multi-Tier Semantic Equivalence** via `gl.vm.run_nondet_unsafe(leader_fn, validator_fn)`:
+`SubjectiveDisputeJury` solves this by introducing **Canonical Settlement Tiers** where validation and storage are independently bound to an economically equivalent result:
 
-### 1. Leader Execution (`leader_fn`)
-1. Fetches both evidence links via `gl.nondet.web.render(url, mode="text")[:4000]`.
-2. Sanitizes content to ASCII and executes structured judicial prompt.
-3. Parses JSON and normalizes output:
-   - `verdict`: `FAVOR_CLAIMANT`, `FAVOR_RESPONDENT`, or `SPLIT_EQUAL`.
-   - `liability_split`: `0..100` (percentage allocated to claimant).
-   - `confidence`: `0..100` (certitude of the ruling).
-   - `rationale`: Concise justification explaining evidence superiority under the rules.
+| Settlement Tier | Description | Claimant Payout | Respondent Payout |
+| :--- | :--- | :---: | :---: |
+| `FULL_CLAIMANT` | Claimant fully performed; respondent in total breach | **100%** | **0%** |
+| `MAJOR_CLAIMANT` | Claimant substantially performed with minor defect | **75%** | **25%** |
+| `SPLIT_EQUAL` | Mutual partial fault or equiponderant evidence | **50%** | **50%** |
+| `MAJOR_RESPONDENT` | Respondent substantially performed; claimant at fault | **25%** | **75%** |
+| `FULL_RESPONDENT` | Respondent fully performed; frivolous claimant claim | **0%** | **100%** |
 
-### 2. Validator Independent Verification (`validator_fn`)
-1. Verifies `isinstance(leader_res, gl.vm.Return)`. If leader crashed or errored, validator returns `False`.
-2. Validator independently fetches both evidence pages and runs its own judicial prompt.
-3. **Equivalence Rule 1 (Verdict Match):**  
-   The categorical verdict must be identical:
+### Consensus Rules in `validator_fn`
+1. **Rule 1 (Categorical Verdict Match):**  
    $$\text{leader}["\text{verdict}"] == \text{validator}["\text{verdict}"]$$
-4. **Equivalence Rule 2 (Liability Band & Margin Match):**  
-   The financial allocation must fall within the same economic tier and be within a 15% tolerance window:
-   - `CLAIMANT_DOMINANT`: $\ge 75\%$
-   - `CLAIMANT_LEANING`: $56 \dots 74\%$
-   - `EQUAL`: $45 \dots 55\%$
-   - `RESPONDENT_LEANING`: $26 \dots 44\%$
-   - `RESPONDENT_DOMINANT`: $\le 25\%$
-   $$\text{band}(\text{leader}) == \text{band}(\text{validator}) \quad \land \quad |\text{leader} - \text{validator}| \le 15$$
-5. **Equivalence Rule 3 (Confidence Band Match):**  
-   Both nodes must share the same conviction tier:
-   - Band 0 (Low): $< 40$
-   - Band 1 (Moderate): $40 \dots 79$
-   - Band 2 (High): $\ge 80$
+2. **Rule 2 (Exact Settlement Tier Match):**  
+   Both leader and validator must independently classify the evidence into the exact same canonical settlement tier:
+   $$\text{leader}["\text{settlement\_tier}"] == \text{validator}["\text{settlement\_tier}"]$$
+3. **Rule 3 (Confidence Band Match):**  
+   Both nodes must share the same conviction tier (Low: $<40$, Moderate: $40 \dots 79$, High: $\ge 80$).
 
-If any check fails, the validator rejects the proposal, preventing rogue or hallucinated rulings.
+### Deterministic State Binding
+When consensus passes, the stored payout allocation is **never** copied from an un-normalized leader float. Instead, it is deterministically mapped:
+```python
+settlement_tier_str = str(adjudication["settlement_tier"])
+c_payout = get_canonical_tier_payout(settlement_tier_str)  # 100, 75, 50, 25, or 0
+r_payout = 100 - c_payout
+```
+This guarantees that any validator committee reaching consensus will store the exact same economic payout with zero variance.
 
 ---
 
@@ -142,32 +146,33 @@ If any check fails, the validator rejects the proposal, preventing rogue or hall
     "respondent_evidence_url": "https://escrow.org/respondent/case1",
     "dispute_rules": "Client must release milestone upon receipt of Figma designs matching SLA.",
     "verdict": "FAVOR_CLAIMANT",
-    "liability_split": 90,
+    "settlement_tier": "FULL_CLAIMANT",
+    "liability_split": 100,
+    "claimant_payout_pct": 100,
+    "respondent_payout_pct": 0,
     "confidence": 95,
     "rationale": "Claimant fully satisfied original SLA before scope change.",
     "resolved_index": 1
   }
   ```
-- `get_dispute_count() -> int`  
-  Returns total number of disputes adjudicated on-chain.
+- `get_settlement_tier(dispute_id: str) -> str`  
+  Returns canonical tier name (`"FULL_CLAIMANT"`, `"MAJOR_CLAIMANT"`, `"SPLIT_EQUAL"`, `"MAJOR_RESPONDENT"`, or `"FULL_RESPONDENT"`).
+- `get_claimant_payout_pct(dispute_id: str) -> int`  
+  Returns percentage of escrowed collateral awarded to claimant (`100`, `75`, `50`, `25`, or `0`).
+- `get_respondent_payout_pct(dispute_id: str) -> int`  
+  Returns percentage of escrowed collateral awarded to respondent (`0`, `25`, `50`, `75`, or `100`).
+- `get_dispute_liability_split(dispute_id: str) -> int`  
+  Returns claimant payout percentage for backward compatibility.
 - `get_dispute_status(dispute_id: str) -> str`  
   Returns ruling verdict (`"FAVOR_CLAIMANT"`, `"FAVOR_RESPONDENT"`, or `"SPLIT_EQUAL"`).
-- `get_dispute_liability_split(dispute_id: str) -> int`  
-  Returns percentage of payout allocated to the claimant (`0..100`).
+- `get_dispute_count() -> int`  
+  Returns total number of disputes adjudicated on-chain.
 - `has_dispute(dispute_id: str) -> bool`  
   Returns `True` if `dispute_id` exists in storage.
 - `get_party_latest_dispute(party: str) -> str`  
   Returns the latest dispute ID associated with an address/identity.
 - `get_statistics() -> str`  
-  Returns JSON summary of global platform counts:
-  ```json
-  {
-    "total_disputes": 1,
-    "favor_claimant_count": 1,
-    "favor_respondent_count": 0,
-    "split_equal_count": 0
-  }
-  ```
+  Returns JSON summary of global platform counts.
 
 ---
 
@@ -187,10 +192,10 @@ class EscrowContract(gl.Contract):
     def settle_disputed_escrow(self, dispute_id: str) -> None:
         # 1. Query ruling from SubjectiveDisputeJury
         jury = gl.get_contract_at(self.jury_contract)
-        split = jury.get_dispute_liability_split(dispute_id)
+        claimant_pct = jury.get_claimant_payout_pct(dispute_id)
         
-        # 2. Automatically release funds proportional to liability split
-        claimant_payout = (int(self.escrow_amount) * split) // 100
+        # 2. Automatically release funds proportional to binding canonical payout
+        claimant_payout = (int(self.escrow_amount) * claimant_pct) // 100
         respondent_payout = int(self.escrow_amount) - claimant_payout
         
         # 3. Disburse escrowed funds deterministically
@@ -202,18 +207,17 @@ class EscrowContract(gl.Contract):
 
 ## 8. Testing & Verification
 
-The contract includes a test suite covering:
-1. **Happy Paths:** Full evaluation lifecycle with mock LLM and mock Web (`sim_installMocks` accepting dict parameter) for `FAVOR_CLAIMANT`, `FAVOR_RESPONDENT`, and `SPLIT_EQUAL`.
+The contract includes a 18-test suite covering:
+1. **Happy Paths:** Full evaluation lifecycle with mock LLM and mock Web for `FULL_CLAIMANT` (100%), `MAJOR_CLAIMANT` (75%), `SPLIT_EQUAL` (50%), and `FULL_RESPONDENT` (0%).
 2. **Consensus Mismatch Handling:**
    - Diverging verdicts between leader and validator (`FAVOR_CLAIMANT` vs `FAVOR_RESPONDENT`).
-   - Diverging liability splits (90% vs 60%, exceeding 15% tolerance).
+   - Diverging settlement tiers (`FULL_CLAIMANT` vs `MAJOR_CLAIMANT`), proving that non-equivalent economic outcomes are rejected by consensus.
    - Diverging confidence bands (High: 85 vs Moderate: 60).
    - Leader execution failure handling (`leader_res` not Return).
-3. **Validation Edge Cases:** Empty claimant/respondent, claimant == respondent self-dispute, unsupported URL protocols, empty dispute rules, dead/failing URLs, unparseable LLM output, unknown verdict categories, and non-existent record queries.
+3. **Validation Edge Cases:** Empty claimant/respondent, claimant == respondent self-dispute, unsupported URL protocols, empty dispute rules, dead/failing URLs, unparseable LLM output, unknown verdict categories, unknown settlement tiers, and non-existent record queries.
 
 ### Running with `gltest` (GenLayer Test Runner)
 ```bash
-# Run the test suite via gltest
 gltest tests/test_subjective_dispute_jury.py -v -s
 ```
 
@@ -238,7 +242,6 @@ This contract primitive is deployed on **GenLayer Studio (studionet)**:
 
 #### 1. Method Invocation (`file_dispute`):
 ```python
-# Illustrative Call to deployed contract on studionet
 contract.file_dispute(
     claimant="0xAliceFreelancer",
     respondent="0xBobClient",
@@ -252,7 +255,7 @@ contract.file_dispute(
 
 #### 2. Expected Consensus Output & Return Value:
 - **Transaction Result (dispute_id):** `"DISPUTE-000001"`
-- **Consensus Verification:** Committee validators independently fetched both live evidence URLs, executed local LLM arbitration prompts, and achieved semantic consensus on verdict (`FAVOR_CLAIMANT`), liability band (`Band 4: CLAIMANT_DOMINANT` [>=75]), and confidence tier (`Band 2: High` [>=80]).
+- **Consensus Verification:** Committee validators independently fetched both live evidence URLs, executed local LLM arbitration prompts, and achieved semantic consensus on verdict (`FAVOR_CLAIMANT`), canonical settlement tier (`FULL_CLAIMANT`), and confidence tier (`Band 2: High` [>=80]).
 
 #### 3. On-Chain State Record (`get_dispute("DISPUTE-000001")`):
 ```json
@@ -264,7 +267,10 @@ contract.file_dispute(
   "respondent_evidence_url": "https://escrow.org/respondent/case1",
   "dispute_rules": "Client must release milestone upon delivery of Figma designs matching SLA.",
   "verdict": "FAVOR_CLAIMANT",
-  "liability_split": 90,
+  "settlement_tier": "FULL_CLAIMANT",
+  "liability_split": 100,
+  "claimant_payout_pct": 100,
+  "respondent_payout_pct": 0,
   "confidence": 95,
   "rationale": "Claimant fully satisfied original SLA before scope change.",
   "resolved_index": 1
@@ -273,24 +279,18 @@ contract.file_dispute(
 
 #### 4. Summary Views:
 - `get_dispute_status("DISPUTE-000001")` -> `"FAVOR_CLAIMANT"`
-- `get_dispute_liability_split("DISPUTE-000001")` -> `90`
+- `get_settlement_tier("DISPUTE-000001")` -> `"FULL_CLAIMANT"`
+- `get_claimant_payout_pct("DISPUTE-000001")` -> `100`
+- `get_respondent_payout_pct("DISPUTE-000001")` -> `0`
 - `get_statistics()` -> `{"total_disputes": 1, "favor_claimant_count": 1, "favor_respondent_count": 0, "split_equal_count": 0}`
-
-*(Labelled: Illustrative worked example based on verified consensus execution paths validated in gltest)*
 
 ---
 
 ## 10. Deployment Guide (GenLayer Studio & Bradbury Testnet)
 
 1. Open **[GenLayer Studio](https://studio.genlayer.com/)**.
-2. Create a new contract file: `subjective_dispute_jury.py`.
+2. Create or select contract: `subjective_dispute_jury.py`.
 3. Paste the contents of `contracts/subjective_dispute_jury.py`.
-4. Click **Compile** to verify schema generation. The contract compiles with zero warnings or errors.
-5. Deploy to **studionet** or **Bradbury Testnet**.
-6. Call `file_dispute`:
-   - `claimant`: `"0xAliceFreelancer"`
-   - `respondent`: `"0xBobClient"`
-   - `claimant_evidence_url`: `"https://escrow.org/claimant/case1"`
-   - `respondent_evidence_url`: `"https://escrow.org/respondent/case1"`
-   - `dispute_rules`: `"Client must release milestone upon delivery of Figma designs matching SLA."`
-7. Query `get_dispute("DISPUTE-000001")` or `get_dispute_liability_split("DISPUTE-000001")` to view the consensus-verified on-chain record!
+4. Click **Compile** to verify schema generation.
+5. Deploy to **studionet**.
+6. Note the new contract address and test the methods in the Studio interface!
