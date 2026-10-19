@@ -15,16 +15,17 @@ Ready-to-copy metadata for the GenLayer Builder Portal submission form:
 - **Project Title:** SubjectiveDisputeJury: On-Chain Subjective Arbitration Primitive with Semantic Consensus
 - **Project Description (< 1,000 characters):**
   ```text
-  SubjectiveDisputeJury is an on-chain two-party arbitration primitive on GenLayer for P2P escrows and marketplaces. Evaluating bilateral contract breaches and conflicting evidence requires subjective natural-language reasoning beyond deterministic EVM logic.
+  SubjectiveDisputeJury is an on-chain two-party arbitration primitive on GenLayer for P2P escrows. Resolving contract breaches and conflicting evidence requires subjective natural-language reasoning beyond deterministic EVM logic.
 
   Architecture:
-  - Leader proposes verdict, canonical settlement tier (FULL_CLAIMANT, MAJOR_CLAIMANT, SPLIT_EQUAL, MAJOR_RESPONDENT, FULL_RESPONDENT), and confidence tier by fetching evidence URLs and parsing natural-language contract terms.
-  - Validators independently re-fetch evidence and reach consensus on semantic meaning: verdict match, exact canonical settlement tier match, and confidence tier.
-  - State: @allow_storage @dataclass DisputeRecord, bigint timestamps/counters, TreeMap[str, ...]. The stored payout allocation is deterministically bound to the agreed canonical tier (100, 75, 50, 25, 0%), guaranteeing an economically equivalent result with zero financial divergence.
+  - Leader proposes verdict, canonical settlement tier (FULL_CLAIMANT, MAJOR_CLAIMANT, SPLIT_EQUAL, MAJOR_RESPONDENT, FULL_RESPONDENT), and confidence tier by fetching evidence URLs.
+  - Validators independently re-fetch evidence and reach consensus on semantic meaning: verdict match, exact canonical tier match, and confidence tier.
+  - State: @allow_storage @dataclass DisputeRecord, bigint counters, TreeMap[str, ...]. The stored payout allocation is deterministically bound to the agreed canonical tier (100, 75, 50, 25, 0%), guaranteeing an economically equivalent result with zero financial divergence.
 
   Integration:
-  Escrow protocols call file_dispute(...) on deadlock and execute settlements via get_dispute(...).
+  Escrows call file_dispute(...) on deadlock and execute settlements via get_dispute(...).
   ```
+  *(Length: 951 characters - strictly under the 1,000 character limit)*
 - **Tags:** `intelligent-contracts`, `arbitration`, `consensus`, `dispute-resolution`, `escrow`, `equivalence-principle`, `llm`, `synthetic-jurisdiction`
 
 ---
